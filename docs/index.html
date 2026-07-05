@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Affordability Index</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f1419; color: #e7e9ea; line-height: 1.6; }
+    .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+    header { text-align: center; padding: 40px 20px; border-bottom: 1px solid #2f3336; margin-bottom: 32px; }
+    h1 { font-size: 2.2rem; margin-bottom: 8px; }
+    .subtitle { color: #8899a6; font-size: 1.1rem; }
+    .formula { background: #1c2732; padding: 16px 24px; border-radius: 8px; margin: 24px auto; max-width: 500px; text-align: center; font-family: monospace; font-size: 1.1rem; color: #1da1f2; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px; margin: 32px 0; }
+    .stat { background: #1c2732; border-radius: 8px; padding: 20px; text-align: center; }
+    .stat-number { font-size: 2rem; font-weight: bold; color: #1da1f2; }
+    .stat-label { font-size: 0.85rem; color: #8899a6; margin-top: 4px; }
+    .filters { margin: 24px 0; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .filters label { color: #8899a6; font-size: 0.85rem; margin-right: 8px; }
+    select { background: #1c2732; color: #e7e9ea; border: 1px solid #2f3336; border-radius: 4px; padding: 6px 12px; font-size: 0.9rem; }
+    table { width: 100%; border-collapse: collapse; margin-top: 16px; }
+    th { background: #1c2732; padding: 12px 16px; text-align: left; font-size: 0.8rem; color: #8899a6; text-transform: uppercase; letter-spacing: 0.5px; position: sticky; top: 0; }
+    td { padding: 10px 16px; border-bottom: 1px solid #2f3336; font-size: 0.9rem; }
+    tr:hover { background: #1c2732; }
+    .bar { height: 8px; border-radius: 4px; min-width: 2px; }
+    .bar-green { background: linear-gradient(90deg, #17bf63, #1da1f2); }
+    .bar-yellow { background: linear-gradient(90deg, #ffad1f, #f45d22); }
+    .bar-red { background: linear-gradient(90deg, #f45d22, #e0245e); }
+    .severity-low { color: #17bf63; }
+    .severity-med { color: #ffad1f; }
+    .severity-high { color: #f45d22; }
+    .severity-extreme { color: #e0245e; }
+    footer { margin-top: 48px; padding: 24px 0; border-top: 1px solid #2f3336; color: #8899a6; font-size: 0.8rem; text-align: center; }
+    footer a { color: #1da1f2; }
+    .disclaimer { background: #1c2732; border-left: 3px solid #ffad1f; padding: 12px 16px; margin: 24px 0; font-size: 0.85rem; color: #8899a6; border-radius: 0 4px 4px 0; }
+    @media (max-width: 640px) { h1 { font-size: 1.5rem; } td, th { padding: 8px; font-size: 0.8rem; } }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>AI Affordability Index</h1>
+      <p class="subtitle">How much more do non-English speakers pay to use AI?</p>
+      <div class="formula">Index = GDP per capita &divide; Tokens per word</div>
+    </header>
+
+    <div class="stats" id="stats"></div>
+
+    <div class="disclaimer">
+      ⚠️ This is an early-stage research index. Figures are approximate and vary by model, tokeniser version, and text type. See <a href="https://github.com/vadhoob90/ai-affordability-index/blob/main/data/methodology.md">methodology</a> for sources and limitations.
+    </div>
+
+    <div class="filters">
+      <label>Filter by script:</label>
+      <select id="script-filter" onchange="applyFilters()">
+        <option value="all">All scripts</option>
+      </select>
+      <label style="margin-left:16px;">Sort by:</label>
+      <select id="sort-by" onchange="applyFilters()">
+        <option value="vs_usa">Affordability gap (worst first)</option>
+        <option value="tpw">Tokens per word (highest first)</option>
+        <option value="index">Affordability index (lowest first)</option>
+        <option value="language">Language (A-Z)</option>
+      </select>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Language</th>
+          <th>Country</th>
+          <th>Script</th>
+          <th>TPW</th>
+          <th>GDP/capita</th>
+          <th>Index</th>
+          <th>vs USA</th>
+          <th>Affordability</th>
+        </tr>
+      </thead>
+      <tbody id="table-body"></tbody>
+    </table>
+
+    <footer>
+      <p>Created by <a href="https://www.linkedin.com/in/bharath-vadhoola/">Bharath Vadhoola</a>. Data and methodology on <a href="https://github.com/vadhoob90/ai-affordability-index">GitHub</a>.</p>
+      <p style="margin-top:8px;">Sources: Petrov et al. (NeurIPS 2023), Ahia et al. (EMNLP 2023), Lundin et al. (2025), Nayeem et al. (2025), Microsoft GPT-4o benchmarks (2024). GDP: World Bank 2023.</p>
+      <p style="margin-top:8px;">All views are my own.</p>
+    </footer>
+  </div>
+
+  <script>
+    let data = [];
+
+    async function loadData() {
+      const resp = await fetch('data/languages.csv');
+      const text = await resp.text();
+      const lines = text.trim().split('\n');
+      const headers = lines[0].split(',');
+      data = lines.slice(1).map(line => {
+        const cols = line.split(',');
+        return {
+          language: cols[0],
+          script: cols[1],
+          country: cols[2],
+          tpw: parseFloat(cols[3]),
+          gdp: parseInt(cols[4]),
+          index: parseInt(cols[5]),
+          vs_usa: parseFloat(cols[6]),
+          source_tpw: cols[7],
+          source_gdp: cols[8]
+        };
+      });
+
+      populateFilters();
+      renderStats();
+      applyFilters();
+    }
+
+    function populateFilters() {
+      const scripts = [...new Set(data.map(d => d.script))].sort();
+      const sel = document.getElementById('script-filter');
+      scripts.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s; opt.textContent = s;
+        sel.appendChild(opt);
+      });
+    }
+
+    function renderStats() {
+      const statsEl = document.getElementById('stats');
+      const languages = new Set(data.map(d => d.language)).size;
+      const countries = new Set(data.map(d => d.country)).size;
+      const worst = Math.max(...data.map(d => d.vs_usa));
+      const scripts = new Set(data.map(d => d.script)).size;
+      statsEl.innerHTML = `
+        <div class="stat"><div class="stat-number">${data.length}</div><div class="stat-label">Language-country pairs</div></div>
+        <div class="stat"><div class="stat-number">${languages}</div><div class="stat-label">Languages</div></div>
+        <div class="stat"><div class="stat-number">${countries}</div><div class="stat-label">Countries</div></div>
+        <div class="stat"><div class="stat-number">${scripts}</div><div class="stat-label">Scripts</div></div>
+        <div class="stat"><div class="stat-number">${worst.toFixed(0)}×</div><div class="stat-label">Worst affordability gap</div></div>
+      `;
+    }
+
+    function applyFilters() {
+      const scriptFilter = document.getElementById('script-filter').value;
+      const sortBy = document.getElementById('sort-by').value;
+
+      let filtered = scriptFilter === 'all' ? [...data] : data.filter(d => d.script === scriptFilter);
+
+      if (sortBy === 'vs_usa') filtered.sort((a, b) => b.vs_usa - a.vs_usa);
+      else if (sortBy === 'tpw') filtered.sort((a, b) => b.tpw - a.tpw);
+      else if (sortBy === 'index') filtered.sort((a, b) => a.index - b.index);
+      else if (sortBy === 'language') filtered.sort((a, b) => a.language.localeCompare(b.language));
+
+      renderTable(filtered);
+    }
+
+    function renderTable(rows) {
+      const tbody = document.getElementById('table-body');
+      const maxVs = Math.max(...data.map(d => d.vs_usa));
+      tbody.innerHTML = rows.map(d => {
+        const barWidth = Math.min((d.vs_usa / maxVs) * 100, 100);
+        let barClass, sevClass;
+        if (d.vs_usa <= 5) { barClass = 'bar-green'; sevClass = 'severity-low'; }
+        else if (d.vs_usa <= 30) { barClass = 'bar-yellow'; sevClass = 'severity-med'; }
+        else if (d.vs_usa <= 100) { barClass = 'bar-red'; sevClass = 'severity-high'; }
+        else { barClass = 'bar-red'; sevClass = 'severity-extreme'; }
+        return `<tr>
+          <td><strong>${d.language}</strong></td>
+          <td>${d.country}</td>
+          <td>${d.script}</td>
+          <td>${d.tpw.toFixed(1)}</td>
+          <td>$${d.gdp.toLocaleString()}</td>
+          <td>${d.index.toLocaleString()}</td>
+          <td class="${sevClass}">${d.vs_usa.toFixed(1)}×</td>
+          <td><div class="bar ${barClass}" style="width:${barWidth}%"></div></td>
+        </tr>`;
+      }).join('');
+    }
+
+    loadData();
+  </script>
+</body>
+</html>
