@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AI Affordability Index</title>
   <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/topojson-client@3"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f1419; color: #e7e9ea; line-height: 1.6; }
@@ -92,12 +93,32 @@
     </div>
 
     <div class="tabs">
-      <div class="tab active" onclick="switchView('chart')">Bar Chart</div>
+      <div class="tab active" onclick="switchView('map')">World Map</div>
+      <div class="tab" onclick="switchView('chart')">Bar Chart</div>
       <div class="tab" onclick="switchView('bubble')">Bubble Plot</div>
       <div class="tab" onclick="switchView('table')">Table</div>
     </div>
 
-    <div class="view active" id="view-chart">
+    <div class="view active" id="view-map">
+      <div style="margin-bottom:12px; display:flex; gap:16px; align-items:center; flex-wrap:wrap;">
+        <label style="color:#8899a6; font-size:0.85rem;">Colour by:</label>
+        <select id="map-metric" onchange="renderMap()" style="background:#1c2732; color:#e7e9ea; border:1px solid #2f3336; border-radius:4px; padding:6px 12px;">
+          <option value="affordability">Affordability gap (vs USA)</option>
+          <option value="tpw">Token cost (TPW)</option>
+        </select>
+      </div>
+      <div style="display:flex; gap:16px; margin-bottom:8px; font-size:0.8rem; color:#8899a6; flex-wrap:wrap;">
+        <span><span style="display:inline-block;width:14px;height:14px;background:#17bf63;border-radius:2px;vertical-align:middle;"></span> Low (affordable)</span>
+        <span><span style="display:inline-block;width:14px;height:14px;background:#ffad1f;border-radius:2px;vertical-align:middle;"></span> Medium</span>
+        <span><span style="display:inline-block;width:14px;height:14px;background:#f45d22;border-radius:2px;vertical-align:middle;"></span> High</span>
+        <span><span style="display:inline-block;width:14px;height:14px;background:#e0245e;border-radius:2px;vertical-align:middle;"></span> Extreme</span>
+        <span><span style="display:inline-block;width:14px;height:14px;background:#2f3336;border-radius:2px;vertical-align:middle;"></span> No data</span>
+      </div>
+      <svg id="world-map" style="width:100%; height:auto;" viewBox="0 0 960 500"></svg>
+      <div id="map-tooltip" style="position:absolute;background:#1c2732;border:1px solid #2f3336;border-radius:6px;padding:10px 14px;font-size:0.8rem;pointer-events:none;display:none;z-index:100;"></div>
+    </div>
+
+    <div class="view" id="view-chart">
       <div class="chart-container"><svg id="bar-chart"></svg></div>
     </div>
 
@@ -146,16 +167,51 @@
   <script>
     let data = [];
 
+    let countryMap = {};
+    let worldData = null;
+
     async function loadData() {
-      const resp = await fetch('data/languages.csv');
-      const text = await resp.text();
-      const lines = text.trim().split('\n');
+      const [langResp, codeResp, mapResp] = await Promise.all([
+        fetch('data/languages.csv'),
+        fetch('data/country-codes.csv'),
+        fetch('world-110m.json')
+      ]);
+      const langText = await langResp.text();
+      const codeText = await codeResp.text();
+      worldData = await mapResp.json();
+
+      // Parse language data
+      const lines = langText.trim().split('\n');
       data = lines.slice(1).map(line => {
         const c = line.split(',');
         return { language:c[0], script:c[1], country:c[2], tpw:+c[3], gdp:+c[4], index:+c[5], vs_usa:+c[6] };
       });
+
+      // Parse country codes
+      const codeLines = codeText.trim().split('\n');
+      codeLines.slice(1).forEach(line => {
+        const [country, iso] = line.split(',');
+        countryMap[country] = +iso;
+      });
+
+      // Build country -> worst affordability gap lookup
+      window.countryAffordability = {};
+      window.countryTPW = {};
+      data.forEach(d => {
+        const iso = countryMap[d.country];
+        if (iso) {
+          if (!window.countryAffordability[iso] || d.vs_usa > window.countryAffordability[iso].vs_usa) {
+            window.countryAffordability[iso] = d;
+          }
+          if (!window.countryTPW[iso] || d.tpw > window.countryTPW[iso].tpw) {
+            window.countryTPW[iso] = d;
+          }
+        }
+      });
+
       renderStats();
       populateFilters();
+      renderMap();
       renderBarChart();
       renderBubbleChart();
       renderTable();
@@ -180,6 +236,59 @@
       const scripts = [...new Set(data.map(d=>d.script))].sort();
       const sel = document.getElementById('script-filter');
       scripts.forEach(s => { const o=document.createElement('option'); o.value=s; o.textContent=s; sel.appendChild(o); });
+    }
+
+    // World map
+    function renderMap() {
+      const svg = d3.select('#world-map');
+      svg.selectAll('*').remove();
+      const metric = document.getElementById('map-metric').value;
+      const tooltip = document.getElementById('map-tooltip');
+
+      const projection = d3.geoNaturalEarth1().scale(155).translate([480, 260]);
+      const path = d3.geoPath().projection(projection);
+      const countries = topojson.feature(worldData, worldData.objects.countries).features;
+
+      function getColor(id) {
+        const lookup = metric === 'tpw' ? window.countryTPW : window.countryAffordability;
+        const d = lookup[+id];
+        if (!d) return '#2f3336';
+        if (metric === 'tpw') {
+          if (d.tpw <= 1.5) return '#17bf63';
+          if (d.tpw <= 2.5) return '#ffad1f';
+          if (d.tpw <= 4.0) return '#f45d22';
+          return '#e0245e';
+        } else {
+          if (d.vs_usa <= 5) return '#17bf63';
+          if (d.vs_usa <= 30) return '#ffad1f';
+          if (d.vs_usa <= 100) return '#f45d22';
+          return '#e0245e';
+        }
+      }
+
+      svg.selectAll('path')
+        .data(countries)
+        .join('path')
+        .attr('d', path)
+        .attr('fill', d => getColor(d.id))
+        .attr('stroke', '#0f1419')
+        .attr('stroke-width', 0.5)
+        .on('mouseenter', (event, d) => {
+          const lookup = metric === 'tpw' ? window.countryTPW : window.countryAffordability;
+          const info = lookup[+d.id];
+          if (info) {
+            tooltip.style.display = 'block';
+            tooltip.innerHTML = `<strong style="color:#1da1f2;">${info.language}</strong> (${info.country})<br>TPW: ${info.tpw.toFixed(1)}× · Gap: ${info.vs_usa.toFixed(1)}× vs USA`;
+          } else {
+            tooltip.style.display = 'block';
+            tooltip.innerHTML = '<span style="color:#8899a6;">No data available</span>';
+          }
+        })
+        .on('mousemove', (event) => {
+          tooltip.style.left = (event.pageX + 12) + 'px';
+          tooltip.style.top = (event.pageY - 40) + 'px';
+        })
+        .on('mouseleave', () => { tooltip.style.display = 'none'; });
     }
 
     // Bar chart
